@@ -2,8 +2,7 @@ import { ref, computed } from 'vue'
 import type { Problem, CodeVersion, Comment, UserRole, ProblemStatus } from '../types/problem'
 import { INITIAL_PROBLEMS } from '../lib/mockData'
 import { analyzeCodeWithAI } from '../lib/aiAnalyzer'
-import { api } from '../lib/api'
-import { getSavedGitHubConfig, GitHubSyncService } from '../lib/githubSync'
+import { turso } from '../lib/turso'
 
 const STORAGE_KEY = 'code_mentor_problems_v1'
 const ROLE_KEY = 'code_mentor_current_role'
@@ -14,65 +13,24 @@ const currentRole = ref<UserRole>('student')
 const selectedProblemId = ref<string>('')
 const activeVersionId = ref<string>('')
 const isAnalyzing = ref<boolean>(false)
-const isUsingSqlite = ref<boolean>(false)
-const isUsingGitHub = ref<boolean>(false)
-const isGitHubSyncing = ref<boolean>(false)
+const isUsingTurso = ref<boolean>(true)
 
-// 取得 GitHub 服務實例
-function getGitHubService(): GitHubSyncService | null {
-  const cfg = getSavedGitHubConfig()
-  return cfg ? new GitHubSyncService(cfg) : null
-}
-
-// 非同步將當前題目 commit 回 GitHub 倉庫
-async function syncToGitHub(commitMsg?: string) {
-  const gh = getGitHubService()
-  if (!gh) return
-  isGitHubSyncing.value = true
-  try {
-    await gh.commitProblems(problems.value, commitMsg)
-  } catch (err) {
-    console.error('Failed to commit to GitHub:', err)
-  } finally {
-    isGitHubSyncing.value = false
-  }
-}
-
-// 初始化資料庫：優先依序連線 GitHub 倉庫 > 本地 SQLite > 降級 LocalStorage
+// 初始化資料庫：直接連線 Turso 雲端 SQLite
 async function initStore() {
-  const ghConfig = getSavedGitHubConfig()
-  if (ghConfig) {
-    try {
-      const gh = new GitHubSyncService(ghConfig)
-      const remote = await gh.fetchRemoteFile()
-      if (remote.problems && remote.problems.length > 0) {
-        problems.value = remote.problems
-        isUsingGitHub.value = true
-        finishInit()
-        return
-      }
-    } catch (e) {
-      console.warn('GitHub sync failed, trying SQLite/Local fallback:', e)
-    }
-  }
-
-  const hasSqlite = await api.checkHealth()
-  if (hasSqlite) {
-    try {
-      const data = await api.getProblems()
+  try {
+    await turso.initTables()
+    const data = await turso.getProblems()
+    if (data && data.length > 0) {
       problems.value = data
-      isUsingSqlite.value = true
-    } catch {
+      isUsingTurso.value = true
+    } else {
       loadFromLocalStorage()
     }
-  } else {
+  } catch (err) {
+    console.warn('[Turso] Failed to connect, using fallback:', err)
     loadFromLocalStorage()
   }
 
-  finishInit()
-}
-
-function finishInit() {
   const savedRole = localStorage.getItem(ROLE_KEY) as UserRole
   if (savedRole && (savedRole === 'student' || savedRole === 'teacher')) {
     currentRole.value = savedRole
@@ -86,23 +44,8 @@ function finishInit() {
   }
 }
 
-async function reloadFromGitHub() {
-  const gh = getGitHubService()
-  if (!gh) return
-  try {
-    const remote = await gh.fetchRemoteFile()
-    if (remote.problems) {
-      problems.value = remote.problems
-      isUsingGitHub.value = true
-      isUsingSqlite.value = false
-    }
-  } catch (err) {
-    console.error('reloadFromGitHub failed:', err)
-  }
-}
-
 function loadFromLocalStorage() {
-  isUsingSqlite.value = false
+  isUsingTurso.value = false
   const savedProblems = localStorage.getItem(STORAGE_KEY)
   if (savedProblems) {
     try {
@@ -117,11 +60,8 @@ function loadFromLocalStorage() {
 }
 
 function saveToStorage() {
-  if (!isUsingSqlite.value) {
+  if (!isUsingTurso.value) {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(problems.value))
-  }
-  if (isUsingGitHub.value) {
-    syncToGitHub()
   }
 }
 
@@ -165,9 +105,9 @@ export function useProblemStore() {
 
   // 建立新題目
   async function addProblem(data: Omit<Problem, 'id' | 'updatedAt' | 'comments' | 'versions'> & { initialCode?: string }) {
-    if (isUsingSqlite.value) {
+    if (isUsingTurso.value) {
       try {
-        const list = await api.addProblem(data)
+        const list = await turso.addProblem(data)
         problems.value = list
         if (list.length > 0) {
           selectedProblemId.value = list[0].id
@@ -175,12 +115,15 @@ export function useProblemStore() {
         }
         return
       } catch (e) {
-        console.error('Failed to add via SQLite:', e)
+        console.error('Failed to add via Turso:', e)
       }
     }
 
     // LocalStorage Fallback
     const id = 'p-' + Date.now()
+    const now = new Date().toISOString()
+    const startedAt = (data.status === 'solving' || data.status === 'solved') ? now : null
+
     const initialVersion: CodeVersion = {
       versionId: 'v-' + Date.now(),
       versionName: 'v1 - 初始實作',
@@ -188,11 +131,8 @@ export function useProblemStore() {
       timeComplexity: '未分析',
       spaceComplexity: '未分析',
       aiSuggestion: '點擊上方「AI 分析」按鈕以獲取演算法複雜度評估與優化建議。',
-      createdAt: new Date().toISOString(),
+      createdAt: now,
     }
-
-    const now = new Date().toISOString()
-    const startedAt = (data.status === 'solving' || data.status === 'solved') ? now : null
 
     const newProb: Problem = {
       id,
@@ -219,14 +159,14 @@ export function useProblemStore() {
   async function addVersion(problemId: string, versionName: string, initialCode?: string) {
     const code = initialCode !== undefined ? initialCode : (currentVersion.value?.code || '')
 
-    if (isUsingSqlite.value) {
+    if (isUsingTurso.value) {
       try {
-        const { list, newVersionId } = await api.addVersion(problemId, versionName, code)
+        const { list, newVersionId } = await turso.addVersion(problemId, versionName, code)
         problems.value = list
         activeVersionId.value = newVersionId
         return
       } catch (e) {
-        console.error('Failed to add version via SQLite:', e)
+        console.error('Failed to add version via Turso:', e)
       }
     }
 
@@ -258,8 +198,8 @@ export function useProblemStore() {
       currentProblem.value.updatedAt = new Date().toISOString()
     }
 
-    if (isUsingSqlite.value) {
-      api.updateVersionCode(currentVersion.value.versionId, code, currentProblem.value?.id)
+    if (isUsingTurso.value) {
+      turso.updateVersionCode(currentVersion.value.versionId, code, currentProblem.value?.id)
     } else {
       saveToStorage()
     }
@@ -271,8 +211,8 @@ export function useProblemStore() {
     currentProblem.value.notes = notes
     currentProblem.value.updatedAt = new Date().toISOString()
 
-    if (isUsingSqlite.value) {
-      api.updateProblemNotes(currentProblem.value.id, notes)
+    if (isUsingTurso.value) {
+      turso.updateProblemNotes(currentProblem.value.id, notes)
     } else {
       saveToStorage()
     }
@@ -280,20 +220,19 @@ export function useProblemStore() {
 
   // 更新題目完整資訊
   async function updateProblemDetails(id: string, updates: Partial<Pick<Problem, 'title' | 'platform' | 'url' | 'difficulty' | 'status' | 'tags'>>) {
-    if (isUsingSqlite.value) {
+    if (isUsingTurso.value) {
       try {
-        const list = await api.updateProblemDetails(id, updates)
+        const list = await turso.updateProblemDetails(id, updates)
         problems.value = list
         return
       } catch (e) {
-        console.error('Failed to update details via SQLite:', e)
+        console.error('Failed to update details via Turso:', e)
       }
     }
 
     const prob = problems.value.find((p) => p.id === id)
     if (!prob) return
     const now = new Date().toISOString()
-    // 首次變更為 solving 或 solved 時紀錄 startedAt
     if (!prob.startedAt && (updates.status === 'solving' || updates.status === 'solved')) {
       prob.startedAt = now
     }
@@ -306,15 +245,14 @@ export function useProblemStore() {
     const prob = problems.value.find((p) => p.id === id)
     if (!prob) return
     const now = new Date().toISOString()
-    // 首次變更為 solving 或 solved 時紀錄 startedAt
     if (!prob.startedAt && (newStatus === 'solving' || newStatus === 'solved')) {
       prob.startedAt = now
     }
     prob.status = newStatus
     prob.updatedAt = now
 
-    if (isUsingSqlite.value) {
-      api.updateProblemStatus(id, newStatus)
+    if (isUsingTurso.value) {
+      turso.updateProblemStatus(id, newStatus)
     } else {
       saveToStorage()
     }
@@ -331,8 +269,8 @@ export function useProblemStore() {
       currentVersion.value.aiSuggestion = result.aiSuggestion
       currentProblem.value.updatedAt = new Date().toISOString()
 
-      if (isUsingSqlite.value) {
-        await api.updateVersionAI(currentVersion.value.versionId, result, currentProblem.value.id)
+      if (isUsingTurso.value) {
+        await turso.updateVersionAI(currentVersion.value.versionId, result, currentProblem.value.id)
       } else {
         saveToStorage()
       }
@@ -346,14 +284,14 @@ export function useProblemStore() {
     if (!currentProblem.value || !content.trim()) return
     const author = currentRole.value
 
-    if (isUsingSqlite.value) {
+    if (isUsingTurso.value) {
       try {
-        const newC = await api.addComment(currentProblem.value.id, author, content.trim())
-        currentProblem.value.comments.push(newC)
+        const newC = await turso.addComment(currentProblem.value.id, author, content.trim())
+        currentProblem.value.comments.push(newC as any)
         currentProblem.value.updatedAt = newC.createdAt
         return
       } catch (e) {
-        console.error('Failed to add comment via SQLite:', e)
+        console.error('Failed to add comment via Turso:', e)
       }
     }
 
@@ -370,9 +308,9 @@ export function useProblemStore() {
 
   // 刪除題目
   async function deleteProblem(id: string) {
-    if (isUsingSqlite.value) {
+    if (isUsingTurso.value) {
       try {
-        const list = await api.deleteProblem(id)
+        const list = await turso.deleteProblem(id)
         problems.value = list
         if (selectedProblemId.value === id) {
           selectedProblemId.value = list[0]?.id || ''
@@ -380,7 +318,7 @@ export function useProblemStore() {
         }
         return
       } catch (e) {
-        console.error('Failed to delete via SQLite:', e)
+        console.error('Failed to delete via Turso:', e)
       }
     }
 
@@ -398,11 +336,7 @@ export function useProblemStore() {
     selectedProblemId,
     activeVersionId,
     isAnalyzing,
-    isUsingSqlite,
-    isUsingGitHub,
-    isGitHubSyncing,
-    reloadFromGitHub,
-    syncToGitHub,
+    isUsingTurso,
     currentProblem,
     currentVersion,
     switchRole,

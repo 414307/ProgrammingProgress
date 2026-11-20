@@ -9,22 +9,12 @@ import {
   Sun,
   Plus,
   Sparkles,
-  Database,
-  FolderGit2,
-  RefreshCw
+  Cloud
 } from '@lucide/vue'
 
-const {
-  currentRole,
-  switchRole,
-  isUsingSqlite,
-  isUsingGitHub,
-  isGitHubSyncing
-} = useProblemStore()
-
+const { currentRole, switchRole, isUsingTurso } = useProblemStore()
 const emit = defineEmits<{
   (e: 'open-create-modal'): void
-  (e: 'open-github-modal'): void
 }>()
 
 const isDark = ref(document.documentElement.classList.contains('dark'))
@@ -57,24 +47,18 @@ function toggleDarkMode() {
             <span class="text-xs px-2 py-0.5 rounded-full font-medium bg-indigo-50 text-indigo-600 dark:bg-indigo-950/60 dark:text-indigo-400 border border-indigo-200 dark:border-indigo-800 flex items-center gap-1">
               <Sparkles class="w-3 h-3" /> 多版本刷題
             </span>
-            <!-- 儲存模式 Badge (點擊可開啟 GitHub 倉庫設定) -->
-            <button
-              @click="emit('open-github-modal')"
+            <span
               :class="[
-                'text-[11px] px-2 py-0.5 rounded-full font-semibold border flex items-center gap-1.5 transition cursor-pointer hover:opacity-80 active:scale-95',
-                isUsingGitHub
-                  ? 'bg-slate-900 text-white dark:bg-slate-800 border-slate-700'
-                  : isUsingSqlite
+                'text-[11px] px-2 py-0.5 rounded-full font-semibold border flex items-center gap-1 transition',
+                isUsingTurso
                   ? 'bg-emerald-50 text-emerald-600 dark:bg-emerald-950/50 dark:text-emerald-400 border-emerald-200 dark:border-emerald-800'
                   : 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400 border-slate-200 dark:border-slate-700'
               ]"
-              :title="isUsingGitHub ? '點擊管理 GitHub 倉庫儲存' : isUsingSqlite ? '已連接本地 SQLite，點擊切換為 GitHub 雲端儲存' : '點擊設定 GitHub 雲端同步儲存'"
+              :title="isUsingTurso ? '已連接 Turso 雲端 SQLite 資料庫 (多人即時同步)' : '離線 LocalStorage 模式'"
             >
-              <FolderGit2 v-if="isUsingGitHub" class="w-3 h-3 text-white" />
-              <Database v-else class="w-3 h-3" />
-              <span>{{ isUsingGitHub ? 'GitHub 倉庫同步' : isUsingSqlite ? 'SQLite 連線中' : 'LocalStorage' }}</span>
-              <RefreshCw v-if="isGitHubSyncing" class="w-2.5 h-2.5 animate-spin text-indigo-300" />
-            </button>
+              <Cloud class="w-3 h-3" />
+              <span>{{ isUsingTurso ? 'Turso 雲端同步中' : 'LocalStorage' }}</span>
+            </span>
           </div>
           <p class="text-xs text-slate-500 dark:text-slate-400">
             智慧型師生刷題與演算法版本管理平台

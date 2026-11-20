@@ -7,24 +7,19 @@ import CodeVersionEditor from './components/CodeVersionEditor.vue'
 import ProblemNotesAndFeedback from './components/ProblemNotesAndFeedback.vue'
 import CreateProblemModal from './components/CreateProblemModal.vue'
 import EditProblemModal from './components/EditProblemModal.vue'
-import GitHubSyncModal from './components/GitHubSyncModal.vue'
 import TeacherDashboard from './components/TeacherDashboard.vue'
 import { LayoutDashboard, Code2 } from '@lucide/vue'
 
 const { currentRole, currentProblem } = useProblemStore()
 const showCreateModal = ref(false)
 const showEditModal = ref(false)
-const showGitHubModal = ref(false)
 const teacherViewMode = ref<'workspace' | 'dashboard'>('workspace')
 </script>
 
 <template>
   <div class="min-h-screen flex flex-col bg-slate-100 dark:bg-slate-950 text-slate-900 dark:text-slate-100">
     <!-- Global Header -->
-    <AppHeader
-      @open-create-modal="showCreateModal = true"
-      @open-github-modal="showGitHubModal = true"
-    />
+    <AppHeader @open-create-modal="showCreateModal = true" />
 
     <!-- Sub-navigation for Teacher Mode -->
     <div
@@ -96,12 +91,6 @@ const teacherViewMode = ref<'workspace' | 'dashboard'>('workspace')
       v-if="showEditModal && currentProblem"
       :problem="currentProblem"
       @close="showEditModal = false"
-    />
-
-    <!-- GitHub Sync Modal -->
-    <GitHubSyncModal
-      v-if="showGitHubModal"
-      @close="showGitHubModal = false"
     />
   </div>
 </template>
